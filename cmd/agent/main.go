@@ -9,13 +9,15 @@ import (
 	"github.com/kyo/AIAgent/internal/agentContext"
 	"github.com/kyo/AIAgent/internal/agentSession"
 	llmclient "github.com/kyo/AIAgent/internal/llmClient"
+	"github.com/kyo/AIAgent/internal/logging"
 	"github.com/kyo/AIAgent/internal/tools"
 )
 
 func main() {
 	ctx := context.Background()
+	log := logging.New()
 
-	llm := llmclient.NewOpenAICompletionClientFromEnv()
+	llm := llmclient.NewOpenAICompletionClientFromEnvWithLogger(log)
 	mem := agentContext.NewMemoryContext()
 	reg := tools.NewMemoryRegistry(tools.EchoTool{})
 
@@ -23,6 +25,7 @@ func main() {
 		LLM:      llm,
 		Ctx:      mem,
 		Tools:    reg,
+		Log:      log,
 		MaxTurns: 8,
 	}
 
@@ -39,7 +42,7 @@ func main() {
 		}
 		ans, err := s.Iterate(ctx, q)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
+			log.Errorf("iterate failed: %v", err)
 			continue
 		}
 		fmt.Println(ans)

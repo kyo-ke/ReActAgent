@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/kyo/AIAgent/internal/logging"
 )
 
 // OpenAICompletionClient implements Chat Completions API:
@@ -27,9 +29,16 @@ type OpenAICompletionClient struct {
 	APIKey     string
 	BaseURL    string
 	Model      string
+	Log        logging.Logger
 }
 
 func NewOpenAICompletionClientFromEnv() *OpenAICompletionClient {
+	return NewOpenAICompletionClientFromEnvWithLogger(nil)
+}
+
+// NewOpenAICompletionClientFromEnvWithLogger is the DI-friendly constructor.
+// If log is nil, a default stderr logger is created.
+func NewOpenAICompletionClientFromEnvWithLogger(log logging.Logger) *OpenAICompletionClient {
 	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
 		model = "gpt-4.1-mini"
@@ -38,11 +47,15 @@ func NewOpenAICompletionClientFromEnv() *OpenAICompletionClient {
 	if base == "" {
 		base = "https://api.openai.com"
 	}
+	if log == nil {
+		log = logging.New()
+	}
 	return &OpenAICompletionClient{
 		HTTPClient: http.DefaultClient,
 		APIKey:     os.Getenv("OPENAI_API_KEY"),
 		BaseURL:    base,
 		Model:      model,
+		Log:        log,
 	}
 }
 
@@ -52,6 +65,9 @@ func (c *OpenAICompletionClient) ensureDefaults(call LLMRequest) (LLMRequest, er
 	}
 	if c.HTTPClient == nil {
 		c.HTTPClient = http.DefaultClient
+	}
+	if c.Log == nil {
+		c.Log = logging.New()
 	}
 	if c.BaseURL == "" {
 		c.BaseURL = "https://api.openai.com"
@@ -71,6 +87,8 @@ func (c *OpenAICompletionClient) CallLLM(ctx context.Context, call LLMRequest) (
 		return LLMResult{}, err
 	}
 
+	c.Log.Debugf("openai chat.completions: model=%s messages=%d tools=%d", call.Model, len(call.Messages), len(call.Tools))
+
 	reqBody, err := buildChatCompletionsRequestBody(call)
 	if err != nil {
 		return LLMResult{}, err
@@ -78,9 +96,11 @@ func (c *OpenAICompletionClient) CallLLM(ctx context.Context, call LLMRequest) (
 
 	payload, err := c.doChatCompletionsRequest(ctx, reqBody)
 	if err != nil {
+		c.Log.Warnf("openai request failed: %v", err)
 		// Some servers/models (e.g., Ollama + certain models) may not support tools.
 		// If we see a 400 with a clear message, retry once without tools.
 		if len(call.Tools) > 0 && isToolsNotSupportedError(err) {
+			c.Log.Infof("tools not supported; retrying without tools")
 			callNoTools := call
 			callNoTools.Tools = nil
 			reqBody2, err2 := buildChatCompletionsRequestBody(callNoTools)
@@ -89,6 +109,7 @@ func (c *OpenAICompletionClient) CallLLM(ctx context.Context, call LLMRequest) (
 			}
 			payload2, err2 := c.doChatCompletionsRequest(ctx, reqBody2)
 			if err2 != nil {
+				c.Log.Warnf("openai retry without tools failed: %v", err2)
 				return LLMResult{}, err
 			}
 			return parseChatCompletionsResponse(payload2)
